@@ -1,5 +1,6 @@
 .env
 .cache/
+charts/
 __pycache__/
 *.pyc
 *.pyo

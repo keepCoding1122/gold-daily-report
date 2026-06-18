@@ -2,10 +2,9 @@ name: 黄金数据日报
 
 on:
   schedule:
-    # 北京时间每天 9:00 / 17:00（UTC 1:00 / 9:00）
     - cron: '0 1 * * *'
     - cron: '0 9 * * *'
-  workflow_dispatch:          # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   report:
@@ -21,6 +20,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
+          pip install matplotlib  # 图表生成
           pip install -r requirements.txt
 
       - name: 运行日报
@@ -28,7 +28,7 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL || 'qwen-plus' }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FRED_START_DATE: '2015-01-01'
         run: python main.py

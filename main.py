@@ -189,6 +189,27 @@ def main():
         else:
             print("   ⚠ AI 总结跳过（无 API Key 或调用失败）")
 
+        # 生成图表（如有金价数据）
+        chart_image_keys = []
+        if "gold_price" in fred_data and not fred_data["gold_price"].empty:
+            try:
+                from indicators.charts import generate_charts
+                from pusher.feishu_image import FeishuImageUploader
+                chart_paths = generate_charts(fred_data["gold_price"])
+                if chart_paths:
+                    uploader = FeishuImageUploader()
+                    if uploader.available:
+                        chart_image_keys = uploader.upload_charts(chart_paths)
+                        report_data["chart_image_keys"] = chart_image_keys
+                        print(f"   ✓ {len(chart_image_keys)} 张图表已上传")
+                    else:
+                        print("   ⚠ 图表已生成本地（飞书 App 未配置，无法自动上传）")
+                        for p in chart_paths:
+                            print(f"      {p}")
+                        report_data["chart_paths"] = chart_paths
+            except Exception as e:
+                print(f"   ⚠ 图表生成失败: {e}")
+
         feishu_msg = build_feishu_message(report_data)
         print(f"   日报共 {len(report_data.get('signals', []))} 条信号")
         print()

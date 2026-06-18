@@ -150,8 +150,13 @@ def build_feishu_message(report: dict) -> dict:
         # 分位
         pr = tech.get("percentile", {})
         if pr.get("percentile") is not None:
-            content.append([{"tag": "text", "text": f"  分位  {pr['window_days']}日历史 {pr['percentile']}%"}]),
+            content.append([{"tag": "text", "text": f"  分位  {pr['window_days']}日历史 {pr['percentile']}%"}])
             content.append([{"tag": "text", "text": ""}])
+
+        # 图表（如果有 image_key）
+        image_keys = report.get("chart_image_keys", [])
+        for ik in image_keys:
+            content.append([{"tag": "img", "image_key": ik}])
 
     # ── 中国市场 ──
     china = report.get("china", {})

@@ -27,6 +27,8 @@ class Config:
     # 飞书
     FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
     FEISHU_SECRET = os.getenv("FEISHU_SECRET", "")
+    FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+    FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
 
     # 阿里百炼（DashScope）
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")

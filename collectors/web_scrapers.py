@@ -1,6 +1,6 @@
-"""网页数据采集 — CFTC / GVZ / GLD 持仓等"""
+"""网页数据采集 — CFTC / GVZ / GLD 持仓 / 实时金价"""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -164,9 +164,76 @@ class WebScraper:
             print(f"    ⚠ CFTC 爬虫失败: {e}")
             return None
 
+    def get_gold_price(self) -> Optional[dict]:
+        """从 Yahoo Finance 获取实时伦敦金价格 (XAU/USD)"""
+        try:
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            resp = self.session.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [{}])[0]
+            meta = result.get("meta", {})
+            price = meta.get("regularMarketPrice")
+            # 获取前一日收盘价用于计算变化
+            prev_close = meta.get("previousClose", price)
+            if price:
+                return {
+                    "price": round(float(price), 2),
+                    "change_pct": round((float(price) - float(prev_close)) / float(prev_close) * 100, 2),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "source": "Yahoo Finance",
+                    "prev_close": round(float(prev_close), 2),
+                }
+        except Exception as e:
+            print(f"    ⚠ Yahoo Finance 金价获取失败: {e}")
+        return None
+
+    def get_gold_price_historical(self) -> Optional[dict]:
+        """获取近期金价历史数据（用于技术面计算）"""
+        try:
+            # Yahoo Finance 获取近 1 年日数据
+            end = int(datetime.now().timestamp())
+            start = int((datetime.now() - timedelta(days=400)).timestamp())
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?period1={start}&period2={end}&interval=1d"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            resp = self.session.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [{}])[0]
+            timestamps = result.get("timestamp", [])
+            quotes = result.get("indicators", {}).get("quote", [{}])[0]
+            closes = quotes.get("close", [])
+
+            if timestamps and closes:
+                rows = []
+                for ts, close in zip(timestamps, closes):
+                    if close:
+                        dt = datetime.fromtimestamp(ts)
+                        rows.append({"date": dt.strftime("%Y-%m-%d"), "gold_price": round(float(close), 2)})
+                return {"prices": rows, "source": "Yahoo Finance"}
+        except Exception as e:
+            print(f"    ⚠ Yahoo Finance 历史金价获取失败: {e}")
+        return None
+
     def collect_all(self) -> dict:
         """采集所有网页数据"""
         result = {}
+
+        print("  [爬虫] 获取实时金价...")
+        gold = self.get_gold_price()
+        if gold:
+            result["gold_price"] = gold
+            print(f"    ✓ 金价: ${gold['price']} ({gold.get('change_pct', 0):+.2f}%)")
+        else:
+            print("    ⚠ 金价未获取到")
+
+        print("  [爬虫] 获取金价历史...")
+        gold_hist = self.get_gold_price_historical()
+        if gold_hist:
+            result["gold_price_history"] = gold_hist
+            n = len(gold_hist.get("prices", []))
+            print(f"    ✓ 获取 {n} 天历史数据")
+        else:
+            print("    ⚠ 金价历史未获取到")
 
         print("  [爬虫] 获取 GLD 持仓...")
         gld = self.get_gld_holdings()

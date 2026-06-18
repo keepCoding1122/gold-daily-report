@@ -30,8 +30,7 @@ class Config:
 
     # FRED series 定义（key = 指标名, value = FRED series_id）
     FRED_SERIES = {
-        # 黄金
-        "gold_price": "GOLDAMGBD228NLBM",          # 伦敦金定盘价 (USD/oz)
+        # 黄金 — 从 Yahoo Finance 获取实时金价（FRED 的 GOLDAMGBD228NLBM 已失效）
         # 利率
         "fed_funds_rate": "FEDFUNDS",              # 联邦基金利率
         "dgs10": "DGS10",                          # 10Y 国债收益率
@@ -51,8 +50,7 @@ class Config:
         "nonfarm_payroll": "PAYEMS",               # 非农就业
         "avg_hourly": "AHETPI",                    # 平均时薪
         # 经济
-        "ism_manufacturing": "NAPM",               # ISM 制造业 PMI
-        "ism_non_manufacturing": "NAPMSN",         # ISM 非制造业 PMI
+        "ism_manufacturing": "ISMPMI",             # ISM 制造业 PMI
         "consumer_confidence": "UMCSENT",          # 消费者信心
         "gdp_real": "GDPC1",                       # 实际 GDP
         # 财政

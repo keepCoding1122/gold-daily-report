@@ -48,19 +48,27 @@ class FredClient:
                 data = json.load(f)
             return self._parse_observations(data, series_id)
 
-        # 请求 API
+        # 请求 API — 禁用 sort_order 和 limit 以避免部分 series 400 错误
         params = {
             "series_id": series_id,
             "api_key": self.API_KEY,
             "file_type": "json",
             "observation_start": observation_start or self.START_DATE,
-            "sort_order": "desc",  # 最新的在前面
-            "limit": 2000,
         }
 
         url = f"{self.BASE_URL}/series/observations"
-        resp = self.session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            # 对于 400 错误，尝试不带 observation_start
+            if "400" in str(e):
+                params.pop("observation_start", None)
+                resp = self.session.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+            else:
+                raise
+
         data = resp.json()
 
         # 检查 API 错误
@@ -95,7 +103,7 @@ class FredClient:
         return df
 
     def fetch_all(self) -> dict[str, pd.DataFrame]:
-        """获取所有配置的 FRED series"""
+        """获取所有配置的 FRED series，以 config key 为列名"""
         results = {}
         total = len(Config.FRED_SERIES)
 
@@ -104,16 +112,17 @@ class FredClient:
             try:
                 df = self.fetch_series(series_id)
                 if not df.empty:
+                    # 关键修复：列名从 FRED series_id 重命名为 config key
+                    if series_id in df.columns:
+                        df = df.rename(columns={series_id: name})
                     results[name] = df
-                    # 打印最新值
                     last = df.iloc[-1]
-                    print(f"    ✓ 最新 ({last['date'].date()}): {last[series_id]}")
+                    print(f"    ✓ 最新 ({last['date'].date()}): {last[name]}")
                 else:
                     print(f"    ⚠ 无数据")
             except Exception as e:
                 print(f"    ✗ 失败: {e}")
 
-            # 避免请求频率过高
             if i < total:
                 time.sleep(0.3)
 

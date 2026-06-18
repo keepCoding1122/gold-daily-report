@@ -5,14 +5,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 加载 .env 文件（项目根目录）
+# 已存在的环境变量不会被覆盖
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
-else:
-    # 回退到 .env.example，提醒用户
+elif not os.environ.get("FRED_API_KEY") or not os.environ.get("FEISHU_WEBHOOK_URL"):
+    # 环境变量也未设置时，尝试 .env.example 让用户知道
     example_path = Path(__file__).parent / ".env.example"
     if example_path.exists():
-        print("[WARN] .env file not found. Copy .env.example to .env and fill in your API keys.")
+        print("[INFO] .env not found. Copy .env.example to .env and fill in your API keys for local runs.")
+        print("[INFO] In GitHub Actions, set secrets in repo settings instead.")
         load_dotenv(example_path)
 
 

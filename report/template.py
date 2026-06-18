@@ -3,7 +3,6 @@
 from datetime import datetime
 
 import pandas as pd
-from config import Config
 
 
 def build_report_data(fred_data: dict, china_data: dict, web_data: dict,
@@ -47,6 +46,16 @@ def build_report_data(fred_data: dict, china_data: dict, web_data: dict,
     return report
 
 
+def _safe_latest(df: pd.DataFrame, key: str) -> float:
+    """安全取 DataFrame 最新值：优先按 key 取列，fallback 到首个数值列"""
+    if key in df.columns:
+        return float(df[key].iloc[-1])
+    value_cols = [c for c in df.columns if c != "date"]
+    if value_cols:
+        return float(df[value_cols[0]].iloc[-1])
+    return None
+
+
 def _get_latest(df: pd.DataFrame, series_key: str) -> float:
     """从 FRED 数据中提取最新值"""
     if series_key not in df or df[series_key].empty:
@@ -81,29 +90,31 @@ def _build_gold_section(fred_data: dict) -> dict:
     gold_series = fred_data.get("gold_price", pd.DataFrame())
     section = {}
 
-    if gold_series is not None and not gold_series.empty:
-        # 最新值
-        section["price"] = round(gold_series["gold_price"].iloc[-1], 2)
-        # 多周期变化
-        for label, days in [("1日", 1), ("1周", 5), ("1月", 21), ("年初至今", None)]:
-            if days:
-                chg = _get_pct_change(gold_series, "gold_price", days)
-                if chg is not None:
-                    section[label] = {
-                        "change_pct": chg,
-                        "direction": "up" if chg > 0 else "down",
-                    }
-        # YTD 年初至今
-        if len(gold_series) > 1:
-            first_this_year = gold_series[gold_series["date"] >= f"{datetime.now().year}-01-01"]
-            if not first_this_year.empty:
-                first_price = first_this_year["gold_price"].iloc[0]
-                last_price = gold_series["gold_price"].iloc[-1]
+    if gold_series is None or gold_series.empty:
+        return section
+
+    col = "gold_price" if "gold_price" in gold_series.columns else next(
+        (c for c in gold_series.columns if c != "date"), None)
+    if col is None:
+        return section
+
+    section["price"] = round(float(gold_series[col].iloc[-1]), 2)
+    for label, days in [("1日", 1), ("1周", 5), ("1月", 21)]:
+        if len(gold_series) > days:
+            current = float(gold_series[col].iloc[-1])
+            prev = float(gold_series[col].iloc[-1 - days])
+            if prev != 0:
+                chg = round((current - prev) / prev * 100, 2)
+                section[label] = {"change_pct": chg, "direction": "up" if chg > 0 else "down"}
+    # YTD 年初至今
+    if len(gold_series) > 1 and "date" in gold_series.columns:
+        first_this_year = gold_series[gold_series["date"] >= f"{datetime.now().year}-01-01"]
+        if not first_this_year.empty:
+            first_price = float(first_this_year[col].iloc[0])
+            last_price = float(gold_series[col].iloc[-1])
+            if first_price != 0:
                 ytd_chg = round((last_price - first_price) / first_price * 100, 2)
-                section["年初至今"] = {
-                    "change_pct": ytd_chg,
-                    "direction": "up" if ytd_chg > 0 else "down",
-                }
+                section["年初至今"] = {"change_pct": ytd_chg, "direction": "up" if ytd_chg > 0 else "down"}
 
     return section
 
@@ -124,12 +135,10 @@ def _build_macro_section(fred_data: dict) -> dict:
     # 实际利率 = DGS10 - T10YIE
     if "dgs10" in fred_data and "t10yie" in fred_data:
         try:
-            dgs = fred_data["dgs10"]
-            tie = fred_data["t10yie"]
-            merged = pd.merge(dgs, tie, on="date", how="inner")
-            if not merged.empty:
-                real_rate = merged["dgs10"].iloc[-1] - merged["t10yie"].iloc[-1]
-                section["real_rate"] = round(real_rate, 2)
+            dgs_val = _safe_latest(fred_data["dgs10"], "dgs10")
+            tie_val = _safe_latest(fred_data["t10yie"], "t10yie")
+            if dgs_val is not None and tie_val is not None:
+                section["real_rate"] = round(dgs_val - tie_val, 2)
         except Exception:
             pass
 
@@ -150,7 +159,9 @@ def _build_macro_section(fred_data: dict) -> dict:
         if key in fred_data:
             df = fred_data[key]
             if df is not None and not df.empty:
-                value = df.iloc[-1][key]
+                value = _safe_latest(df, key)
+                if value is None:
+                    continue
                 section[key] = {
                     "label": label,
                     "value": round(float(value), 2),
@@ -159,9 +170,10 @@ def _build_macro_section(fred_data: dict) -> dict:
     # 期限利差
     if "dgs10" in fred_data and "dgs2" in fred_data:
         try:
-            d10 = fred_data["dgs10"]["dgs10"].iloc[-1]
-            d2 = fred_data["dgs2"]["dgs2"].iloc[-1]
-            section["spread"] = round(float(d10) - float(d2), 2)
+            d10 = _safe_latest(fred_data["dgs10"], "dgs10")
+            d2 = _safe_latest(fred_data["dgs2"], "dgs2")
+            if d10 is not None and d2 is not None:
+                section["spread"] = round(d10 - d2, 2)
         except Exception:
             pass
 
@@ -218,23 +230,18 @@ def _build_assets_comparison(fred_data: dict) -> list:
     """资产表现对比"""
     comparisons = []
 
-    # 黄金 YTD
-    if "gold_price" in fred_data:
-        df = fred_data["gold_price"]
-        if df is not None and not df.empty and len(df) > 1:
-            first = df.iloc[0]["gold_price"]
-            last = df.iloc[-1]["gold_price"]
-            gold_ytd = round((last - first) / first * 100, 2)
-            comparisons.append(("黄金", gold_ytd))
-
-    # 标普 500 YTD
-    if "sp500" in fred_data:
-        df = fred_data["sp500"]
-        if df is not None and not df.empty and len(df) > 1:
-            first = df.iloc[0]["sp500"]
-            last = df.iloc[-1]["sp500"]
-            sp_ytd = round((last - first) / first * 100, 2)
-            comparisons.append(("标普500", sp_ytd))
+    for name, label in [("gold_price", "黄金"), ("sp500", "标普500")]:
+        if name not in fred_data:
+            continue
+        df = fred_data[name]
+        if df is None or df.empty or len(df) < 2:
+            continue
+        col = name if name in df.columns else next((c for c in df.columns if c != "date"), None)
+        if col is None:
+            continue
+        first, last = float(df[col].iloc[0]), float(df[col].iloc[-1])
+        if first != 0:
+            comparisons.append((label, round((last - first) / first * 100, 2)))
 
     return comparisons
 

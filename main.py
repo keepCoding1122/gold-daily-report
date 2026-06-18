@@ -18,6 +18,7 @@ from collectors.web_scrapers import WebScraper
 from indicators.fiscal_pressure import FiscalPressureIndex
 from indicators.technical import TechnicalIndicators, SentimentIndicators
 from report.template import build_report_data
+from report.ai_summary import generate_summary
 from report.formatter import build_feishu_message
 from pusher.feishu_bot import FeishuBot
 
@@ -99,15 +100,19 @@ def main():
             debt_df = fred_data["federal_debt"]
             gdp_df = fred_data["gdp_real"]
             if not debt_df.empty and not gdp_df.empty:
-                debt = debt_df["federal_debt"].iloc[-1]
-                gdp = gdp_df["gdp_real"].iloc[-1]
-                debt_gdp = round(debt / gdp / 10, 1)
+                debt_col = "federal_debt" if "federal_debt" in debt_df.columns else next((c for c in debt_df.columns if c != "date"), None)
+                gdp_col = "gdp_real" if "gdp_real" in gdp_df.columns else next((c for c in gdp_df.columns if c != "date"), None)
+                if debt_col and gdp_col:
+                    debt = float(debt_df[debt_col].iloc[-1])
+                    gdp = float(gdp_df[gdp_col].iloc[-1])
+                    debt_gdp = round(debt / gdp / 10, 1)
 
         if "fiscal_deficit" in fred_data:
             deficit_df = fred_data["fiscal_deficit"]
             if not deficit_df.empty:
-                deficit = deficit_df["fiscal_deficit"].iloc[-1]
-                if debt_gdp:
+                deficit_col = "fiscal_deficit" if "fiscal_deficit" in deficit_df.columns else next((c for c in deficit_df.columns if c != "date"), None)
+                if deficit_col and debt_gdp:
+                    deficit = float(deficit_df[deficit_col].iloc[-1])
                     deficit_gdp = round(abs(deficit) / (debt_gdp / 100 * 100) / 10, 1)
 
         fiscal = FiscalPressureIndex().calculate(
@@ -144,14 +149,16 @@ def main():
         has_gdp = "gdp_real" in fred_data
         if has_t10yie and has_gdp:
             try:
-                inflation = float(fred_data["t10yie"]["t10yie"].iloc[-1])
-                gdp_vals = fred_data["gdp_real"]["gdp_real"].values
-                if len(gdp_vals) >= 4:
-                    gdp_growth = round((gdp_vals[-1] - gdp_vals[-4]) / gdp_vals[-4] * 100, 1)
-                else:
-                    gdp_growth = 2.5
-                sentiment["regime_matrix"] = SentimentIndicators.regime_matrix(gdp_growth, inflation)
-                print(f"   ✓ 增长×通胀矩阵: {sentiment['regime_matrix']['regime']}")
+                t10_df = fred_data["t10yie"]
+                t10_col = "t10yie" if "t10yie" in t10_df.columns else next((c for c in t10_df.columns if c != "date"), None)
+                gdp_df = fred_data["gdp_real"]
+                gdp_col = "gdp_real" if "gdp_real" in gdp_df.columns else next((c for c in gdp_df.columns if c != "date"), None)
+                if t10_col and gdp_col:
+                    inflation = float(t10_df[t10_col].iloc[-1])
+                    gdp_vals = gdp_df[gdp_col].values
+                    gdp_growth = round((gdp_vals[-1] - gdp_vals[-4]) / gdp_vals[-4] * 100, 1) if len(gdp_vals) >= 4 else 2.5
+                    sentiment["regime_matrix"] = SentimentIndicators.regime_matrix(gdp_growth, inflation)
+                    print(f"   ✓ 增长×通胀矩阵: {sentiment['regime_matrix']['regime']}")
             except Exception as e:
                 print(f"   ⚠ 通胀矩阵: {e}")
     except Exception as e:
@@ -170,6 +177,15 @@ def main():
             fiscal=fiscal,
             sentiment=sentiment,
         )
+
+        # AI 总结（百炼大模型）
+        print("   [AI] 生成市场总结...")
+        ai_summary = generate_summary(report_data)
+        if ai_summary:
+            report_data["ai_summary"] = ai_summary
+            print(f"   ✓ AI 总结: {ai_summary[:50]}...")
+        else:
+            print("   ⚠ AI 总结跳过（无 API Key 或调用失败）")
 
         feishu_msg = build_feishu_message(report_data)
         print(f"   日报共 {len(report_data.get('signals', []))} 条信号")

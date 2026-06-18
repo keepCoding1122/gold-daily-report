@@ -1,331 +1,182 @@
 """飞书消息格式器 — 将日报数据转为飞书 Post 消息 JSON"""
 
-from datetime import datetime
-
 
 def build_feishu_message(report: dict) -> dict:
-    """
-    将 report dict 转为飞书 Post 消息 payload
-
-    Returns:
-        dict: 可直接 POST 给飞书 webhook 的 JSON payload
-    """
+    """将 report dict 转为飞书 Post 消息 payload"""
     content = []
     date_str = report.get("date", "")
     weekday = report.get("weekday", "")
 
-    # ── 标题行 ──
-    content.append([
-        {"tag": "text", "text": f"📊 黄金看板 · 数据日报"},
-    ])
-    content.append([
-        {"tag": "text", "text": f"{date_str} ({weekday})", "un_escape": True},
-    ])
-    content.append([{"tag": "text", "text": ""}])  # 空行
+    # ── AI 总结（最醒目的位置） ──
+    ai_summary = report.get("ai_summary", "")
+    if ai_summary:
+        content.append([{"tag": "text", "text": f"💡 {ai_summary}"}])
+        content.append([{"tag": "text", "text": ""}])
 
-    # ── 一、金价速览 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "🟡 一、金价速览", "bold": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-
+    # ── 金价速览 ──
     gold = report.get("gold", {})
     if gold.get("price"):
-        content.append([
-            {"tag": "text", "text": f"伦敦金：${gold['price']}/盎司"},
-        ])
+        price_line = f"🟡 伦敦金  ${gold['price']}"
+        periods = []
+        for period in ["1日", "1周", "1月", "年初至今"]:
+            if period in gold:
+                chg = gold[period].get("change_pct", 0)
+                arrow = "↑" if chg > 0 else "↓"
+                periods.append(f"{period} {chg:+.2f}%{arrow}")
+        content.append([{"tag": "text", "text": price_line, "bold": True}])
+        if periods:
+            content.append([{"tag": "text", "text": f"  {'  |  '.join(periods)}"}])
+        content.append([{"tag": "text", "text": ""}])
 
-    # 多周期变化
-    for period in ["1日", "1周", "1月", "年初至今"]:
-        if period in gold:
-            chg = gold[period].get("change_pct", 0)
-            arrow = "▲" if chg > 0 else "▼"
-            content.append([
-                {"tag": "text", "text": f"  {period}：{chg:+.2f}%  {arrow}"},
-            ])
-
-    content.append([{"tag": "text", "text": ""}])
-
-    # ── 二、宏观层 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "🏛️ 二、宏观层", "bold": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-
+    # ── 宏观数据 ──
     macro = report.get("macro", {})
-    macro_mappings = {
-        "real_rate": "实际利率",
-        "fed_funds_rate": "联邦基金利率",
-        "dgs10": "10Y国债收益率",
-        "dgs2": "2Y国债收益率",
-        "spread": "期限利差(10Y-2Y)",
-        "t5yie": "5Y通胀预期",
-        "t10yie": "10Y通胀预期",
-        "dollar_index": "美元指数(贸易加权)",
-        "unemployment": "失业率",
-        "ism_manufacturing": "ISM制造业PMI",
-        "core_pce": "核心PCE",
-    }
+    if macro:
+        content.append([{"tag": "text", "text": "▎宏观面", "bold": True}])
 
-    for key, label in macro_mappings.items():
-        if key in macro:
-            val = macro[key]
-            if isinstance(val, dict):
-                v = val.get("value", "")
-            else:
-                v = val
-            suffix = "%" if key not in ["dollar_index", "ism_manufacturing", "spread", "core_pce"] else ""
-            if key == "core_pce":
-                suffix = "%"
-            content.append([
-                {"tag": "text", "text": f"📌 {label}：{v}{suffix}"},
-            ])
+        # 利率组
+        rate_items = []
+        if "real_rate" in macro:
+            rate_items.append(f"实际利率 {macro['real_rate']}%")
+        for key, short in [("fed_funds_rate", "联邦基金"), ("dgs10", "10Y"), ("dgs2", "2Y")]:
+            if key in macro:
+                rate_items.append(f"{short} {macro[key]['value']}%")
+        if "spread" in macro:
+            rate_items.append(f"利差 {macro['spread']}%")
+        if rate_items:
+            content.append([{"tag": "text", "text": f"  利率｜{'  '.join(rate_items)}"}])
 
-    content.append([{"tag": "text", "text": ""}])
+        # 通胀组
+        infl_items = []
+        for key, short in [("t5yie", "5Y预期"), ("t10yie", "10Y预期"), ("core_pce", "核心PCE")]:
+            if key in macro:
+                infl_items.append(f"{short} {macro[key]['value']}%")
+        if infl_items:
+            content.append([{"tag": "text", "text": f"  通胀｜{'  '.join(infl_items)}"}])
 
-    # ── 三、财政压力指数 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "💰 三、财政压力指数", "bold": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
+        # 其他
+        other_items = []
+        if "dollar_index" in macro:
+            other_items.append(f"美元 {macro['dollar_index']['value']}")
+        if "unemployment" in macro:
+            other_items.append(f"失业率 {macro['unemployment']['value']}%")
+        if "ism_manufacturing" in macro:
+            other_items.append(f"ISM {macro['ism_manufacturing']['value']}")
+        if other_items:
+            content.append([{"tag": "text", "text": f"  其他｜{'  '.join(other_items)}"}])
 
+        content.append([{"tag": "text", "text": ""}])
+
+    # ── 财政压力 ──
     fiscal = report.get("fiscal", {})
     if fiscal.get("score") is not None:
+        content.append([{"tag": "text", "text": "▎财政压力", "bold": True}])
         components = fiscal.get("components", {})
-        for key, comp in components.items():
-            content.append([
-                {"tag": "text", "text": f"  {comp['label']}：{comp['value']:.1f}%"},
-            ])
-        content.append([
-            {"tag": "text", "text": f"  ─────────────────"},
-        ])
-        content.append([
-            {"tag": "text", "text": f"  财政压力评分：{fiscal['score']}/100", "bold": True},
-        ])
-        content.append([
-            {"tag": "text", "text": f"  区间：{fiscal.get('regime', 'N/A')}", "bold": True},
-        ])
-    else:
-        content.append([{"tag": "text", "text": "  数据不足（需 FRED 联邦债务/赤字数据）"}])
+        comp_parts = [f"{c['label']} {c['value']:.1f}%" for c in components.values()]
+        if comp_parts:
+            content.append([{"tag": "text", "text": f"  {' / '.join(comp_parts)}"}])
+        content.append([{"tag": "text", "text": f"  评分 {fiscal['score']}/100 → {fiscal.get('regime', 'N/A')}"}])
+        content.append([{"tag": "text", "text": ""}])
 
-    content.append([{"tag": "text", "text": ""}])
-
-    # ── 四、市场情绪 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "📈 四、市场情绪", "bold": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-
+    # ── 市场情绪 ──
     sentiment = report.get("sentiment", {})
-
-    # GLD
+    sentiment_items = []
     gld = sentiment.get("gld", {})
     if gld:
-        trend = gld.get("trend", "")
-        content.append([
-            {"tag": "text", "text": f"📌 GLD ETF 持仓趋势：{trend}"},
-        ])
-
-    # CFTC
+        sentiment_items.append(f"GLD {gld.get('trend', '')}")
     cftc = sentiment.get("cftc", {})
-    if cftc:
-        pct = cftc.get("percentile")
-        signal = cftc.get("signal", "")
-        if pct:
-            content.append([
-                {"tag": "text", "text": f"📌 CFTC 净多头拥挤度：{pct}%分位 {signal}"},
-            ])
-
-    # GVZ
+    if cftc and cftc.get("percentile"):
+        sentiment_items.append(f"CFTC {cftc['percentile']}%分位 {cftc.get('signal', '')}")
     gvz = sentiment.get("gvz")
     if gvz:
-        content.append([
-            {"tag": "text", "text": f"📌 GVZ 波动率指数：{gvz}"},
-        ])
-
-    # 通胀矩阵
+        sentiment_items.append(f"GVZ {gvz}")
     matrix = sentiment.get("regime_matrix", {})
-    if matrix and isinstance(matrix, dict):
-        regime = matrix.get("regime", "")
-        outlook = matrix.get("gold_outlook", "")
-        if regime:
-            content.append([
-                {"tag": "text", "text": f"📌 增长×通胀定位：{regime}"},
-            ])
-            content.append([
-                {"tag": "text", "text": f"   → {outlook}"},
-            ])
+    if isinstance(matrix, dict) and matrix.get("regime"):
+        sentiment_items.append(f"{matrix['regime']}→{matrix.get('gold_outlook', '')}")
 
-    content.append([{"tag": "text", "text": ""}])
+    if sentiment_items:
+        content.append([{"tag": "text", "text": "▎市场情绪", "bold": True}])
+        for item in sentiment_items:
+            content.append([{"tag": "text", "text": f"  · {item}"}])
+        content.append([{"tag": "text", "text": ""}])
 
-    # ── 五、技术面 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "📊 五、技术面", "bold": True},
-    ])
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-
+    # ── 技术面 ──
     tech = report.get("technical", {})
     if tech:
+        content.append([{"tag": "text", "text": "▎技术面", "bold": True}])
         ma = tech.get("moving_averages", {})
+        ma_parts = []
         for label in ["5日", "20日", "60日", "200日"]:
             if label in ma:
-                content.append([
-                    {"tag": "text", "text": f"  {label}均线：${ma[label]['ma']}  (偏离{ma[label]['deviation_pct']:+.2f}%)"},
-                ])
+                ma_parts.append(f"{label} ${ma[label]['ma']}({ma[label]['deviation_pct']:+.1f}%)")
+        if ma_parts:
+            content.append([{"tag": "text", "text": f"  均线｜{'  '.join(ma_parts)}"}])
         trend_sig = ma.get("trend_signal", "")
         if trend_sig:
-            content.append([
-                {"tag": "text", "text": f"  信号：{trend_sig}"},
-            ])
-
-        # 百分位
+            content.append([{"tag": "text", "text": f"  信号｜{trend_sig}"}])
         pr = tech.get("percentile", {})
         if pr.get("percentile") is not None:
-            content.append([
-                {"tag": "text", "text": f"  当前在{pr.get('window_days', '?')}日历史中处于 {pr['percentile']}% 分位"},
-            ])
+            content.append([{"tag": "text", "text": f"  分位｜{pr.get('window_days', '?')}日历史 {pr['percentile']}%"}])
+        content.append([{"tag": "text", "text": ""}])
 
-    content.append([{"tag": "text", "text": ""}])
-
-    # ── 六、中国市场 ──
+    # ── 中国市场 ──
     china = report.get("china", {})
     if china:
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "🌐 六、中国市场", "bold": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-
+        china_items = []
         sg = china.get("shanghai_gold", {})
         if sg:
-            content.append([
-                {"tag": "text", "text": f"📌 上海金(Au99.99)：¥{sg.get('price', '?')}/克"},
-            ])
-
+            china_items.append(f"沪金 ¥{sg.get('price', '?')}/克")
         cny = china.get("usd_cny")
         if cny:
-            content.append([
-                {"tag": "text", "text": f"📌 USD/CNY：{cny}"},
-            ])
-
+            china_items.append(f"USD/CNY {cny}")
         cpi = china.get("china_cpi", {})
         if cpi:
-            content.append([
-                {"tag": "text", "text": f"📌 中国CPI：{cpi.get('value', '?')}%"},
-            ])
-
+            china_items.append(f"CPI {cpi.get('value', '?')}%")
         pmi = china.get("china_pmi", {})
         if pmi:
-            content.append([
-                {"tag": "text", "text": f"📌 中国PMI：{pmi.get('official', '?')} (制造业)"},
-            ])
-
+            china_items.append(f"PMI {pmi.get('official', '?')}")
         m2 = china.get("china_m2", {})
         if m2:
-            content.append([
-                {"tag": "text", "text": f"📌 中国M2：+{m2.get('value', '?')}% YoY"},
-            ])
-
+            china_items.append(f"M2 +{m2.get('value', '?')}%")
         fr = china.get("china_foreign_reserve", {})
         if fr:
-            content.append([
-                {"tag": "text", "text": f"📌 外汇储备：${fr.get('value', '?')}万亿"},
-            ])
+            china_items.append(f"外储 ${fr.get('value', '?')}万亿")
 
-        content.append([{"tag": "text", "text": ""}])
+        if china_items:
+            content.append([{"tag": "text", "text": "▎中国市场", "bold": True}])
+            content.append([{"tag": "text", "text": f"  {'  |  '.join(china_items)}"}])
+            content.append([{"tag": "text", "text": ""}])
 
-    # ── 七、资产对比 ──
+    # ── 资产对比 ──
     assets = report.get("assets", [])
     if assets:
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "🏆 七、资产表现对比 (YTD)", "bold": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-
+        parts = []
         for name, ytd in assets:
-            arrow = "▲" if ytd > 0 else "▼"
-            content.append([
-                {"tag": "text", "text": f"  {name}：{ytd:+.1f}%  {arrow}"},
-            ])
-
+            arrow = "↑" if ytd > 0 else "↓"
+            parts.append(f"{name} {ytd:+.1f}%{arrow}")
+        content.append([{"tag": "text", "text": "▎YTD对比", "bold": True}])
+        content.append([{"tag": "text", "text": f"  {'  vs  '.join(parts)}"}])
         content.append([{"tag": "text", "text": ""}])
 
-    # ── 八、关键信号 ──
+    # ── 关键信号 ──
     signals = report.get("signals", [])
     if signals:
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "💡 八、今日关键信号", "bold": True},
-        ])
-        content.append([
-            {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-        ])
-
+        content.append([{"tag": "text", "text": "─── 今日信号 ───", "bold": True}])
         for icon, msg in signals:
-            content.append([
-                {"tag": "text", "text": f"  {icon} {msg}"},
-            ])
-
+            content.append([{"tag": "text", "text": f"{icon} {msg}"}])
         content.append([{"tag": "text", "text": ""}])
 
     # ── 页脚 ──
-    content.append([
-        {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━━━━", "un_escape": True},
-    ])
-    content.append([
-        {"tag": "text", "text": f"数据源：FRED / AKShare / CFTC / CBOE"},
-    ])
-    content.append([
-        {"tag": "text", "text": f"生成时间：{report.get('generated_at', '')} CST"},
-    ])
+    content.append([{"tag": "text", "text": f"⏱ {report.get('generated_at', '')}  ·  FRED / Yahoo / AKShare"}])
 
     # 组装飞书 payload
-    payload = {
+    return {
         "msg_type": "post",
         "content": {
             "post": {
                 "zh_cn": {
-                    "title": f"📊 黄金看板日报 · {date_str}",
+                    "title": f"📊 黄金日报 · {date_str} {weekday}",
                     "content": content,
                 }
             }
         }
     }
-
-    return payload

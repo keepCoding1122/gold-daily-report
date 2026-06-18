@@ -28,6 +28,10 @@ class Config:
     FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
     FEISHU_SECRET = os.getenv("FEISHU_SECRET", "")
 
+    # 阿里百炼（DashScope）
+    DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+    DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
+
     # FRED series 定义（key = 指标名, value = FRED series_id）
     FRED_SERIES = {
         # 黄金 — 从 Yahoo Finance 获取实时金价（FRED 的 GOLDAMGBD228NLBM 已失效）
@@ -49,8 +53,7 @@ class Config:
         "unemployment": "UNRATE",                  # 失业率
         "nonfarm_payroll": "PAYEMS",               # 非农就业
         "avg_hourly": "AHETPI",                    # 平均时薪
-        # 经济
-        "ism_manufacturing": "ISMPMI",             # ISM 制造业 PMI
+        # 经济（注：ISM PMI 已于 2016 年从 FRED 下架，无法通过 API 获取）
         "consumer_confidence": "UMCSENT",          # 消费者信心
         "gdp_real": "GDPC1",                       # 实际 GDP
         # 财政

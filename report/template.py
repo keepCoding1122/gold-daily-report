@@ -3,15 +3,13 @@
 from datetime import datetime
 
 import pandas as pd
+from indicators.trade_advice import build_trade_advice
 
 
 def build_report_data(fred_data: dict, china_data: dict, web_data: dict,
                       technical: dict, fiscal: dict, sentiment: dict) -> dict:
     """
     将各采集层数据合并为日报数据对象
-
-    Returns:
-        dict: 包含所有日报板块数据的字典
     """
     report = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -43,17 +41,10 @@ def build_report_data(fred_data: dict, china_data: dict, web_data: dict,
     # 八、关键信号
     report["signals"] = _build_signals(report)
 
+    # 九、交易建议
+    report["trade_advice"] = build_trade_advice(report)
+
     return report
-
-
-def _safe_latest(df: pd.DataFrame, key: str) -> float:
-    """安全取 DataFrame 最新值：优先按 key 取列，fallback 到首个数值列"""
-    if key in df.columns:
-        return float(df[key].iloc[-1])
-    value_cols = [c for c in df.columns if c != "date"]
-    if value_cols:
-        return float(df[value_cols[0]].iloc[-1])
-    return None
 
 
 def _get_latest(df: pd.DataFrame, series_key: str) -> float:
@@ -90,30 +81,27 @@ def _build_gold_section(fred_data: dict) -> dict:
     gold_series = fred_data.get("gold_price", pd.DataFrame())
     section = {}
 
-    if gold_series is None or gold_series.empty:
-        return section
+    if gold_series is not None and not gold_series.empty:
+        col = "gold_price" if "gold_price" in gold_series.columns else next(
+            (c for c in gold_series.columns if c != "date"), None)
+        if col is None:
+            return section
 
-    col = "gold_price" if "gold_price" in gold_series.columns else next(
-        (c for c in gold_series.columns if c != "date"), None)
-    if col is None:
-        return section
+        section["price"] = round(float(gold_series[col].iloc[-1]), 2)
 
-    section["price"] = round(float(gold_series[col].iloc[-1]), 2)
-    for label, days in [("1日", 1), ("1周", 5), ("1月", 21)]:
-        if len(gold_series) > days:
-            current = float(gold_series[col].iloc[-1])
-            prev = float(gold_series[col].iloc[-1 - days])
-            if prev != 0:
-                chg = round((current - prev) / prev * 100, 2)
-                section[label] = {"change_pct": chg, "direction": "up" if chg > 0 else "down"}
-    # YTD 年初至今
-    if len(gold_series) > 1 and "date" in gold_series.columns:
-        first_this_year = gold_series[gold_series["date"] >= f"{datetime.now().year}-01-01"]
-        if not first_this_year.empty:
-            first_price = float(first_this_year[col].iloc[0])
-            last_price = float(gold_series[col].iloc[-1])
-            if first_price != 0:
-                ytd_chg = round((last_price - first_price) / first_price * 100, 2)
+        for label, days in [("1日", 1), ("1周", 5), ("1月", 21), ("年初至今", None)]:
+            if days:
+                chg = _get_pct_change(gold_series, col, days)
+                if chg is not None:
+                    section[label] = {"change_pct": chg, "direction": "up" if chg > 0 else "down"}
+
+        # YTD
+        if len(gold_series) > 1:
+            this_year = gold_series[gold_series["date"] >= f"{datetime.now().year}-01-01"]
+            if not this_year.empty:
+                first = float(this_year[col].iloc[0])
+                last = float(gold_series[col].iloc[-1])
+                ytd_chg = round((last - first) / first * 100, 2)
                 section["年初至今"] = {"change_pct": ytd_chg, "direction": "up" if ytd_chg > 0 else "down"}
 
     return section
@@ -122,27 +110,24 @@ def _build_gold_section(fred_data: dict) -> dict:
 def _build_macro_section(fred_data: dict) -> dict:
     """宏观层板块"""
     section = {}
-    # 先合并所有 FRED 数据
-    dfs = []
-    for name, df in fred_data.items():
-        if df is not None and not df.empty:
-            d = df.copy()
-            dfs.append(d)
-
-    if not dfs:
-        return section
 
     # 实际利率 = DGS10 - T10YIE
     if "dgs10" in fred_data and "t10yie" in fred_data:
         try:
-            dgs_val = _safe_latest(fred_data["dgs10"], "dgs10")
-            tie_val = _safe_latest(fred_data["t10yie"], "t10yie")
-            if dgs_val is not None and tie_val is not None:
-                section["real_rate"] = round(dgs_val - tie_val, 2)
+            dgs = fred_data["dgs10"]
+            tie = fred_data["t10yie"]
+            dgs_col = "dgs10" if "dgs10" in dgs.columns else next(
+                (c for c in dgs.columns if c != "date"), None)
+            tie_col = "t10yie" if "t10yie" in tie.columns else next(
+                (c for c in tie.columns if c != "date"), None)
+            if dgs_col and tie_col:
+                merged = pd.merge(dgs, tie, on="date", how="inner")
+                if not merged.empty:
+                    real_rate = float(merged[dgs_col].iloc[-1]) - float(merged[tie_col].iloc[-1])
+                    section["real_rate"] = round(real_rate, 2)
         except Exception:
             pass
 
-    # 直接从 FRED series 取最新值
     single_series = [
         ("fed_funds_rate", "联邦基金利率"),
         ("dgs10", "10Y国债收益率"),
@@ -159,21 +144,18 @@ def _build_macro_section(fred_data: dict) -> dict:
         if key in fred_data:
             df = fred_data[key]
             if df is not None and not df.empty:
-                value = _safe_latest(df, key)
-                if value is None:
-                    continue
-                section[key] = {
-                    "label": label,
-                    "value": round(float(value), 2),
-                }
+                col = key if key in df.columns else next(
+                    (c for c in df.columns if c != "date"), None)
+                if col:
+                    try:
+                        section[key] = {"label": label, "value": round(float(df[col].iloc[-1]), 2)}
+                    except (ValueError, TypeError, IndexError):
+                        pass
 
     # 期限利差
-    if "dgs10" in fred_data and "dgs2" in fred_data:
+    if "dgs10" in section and "dgs2" in section:
         try:
-            d10 = _safe_latest(fred_data["dgs10"], "dgs10")
-            d2 = _safe_latest(fred_data["dgs2"], "dgs2")
-            if d10 is not None and d2 is not None:
-                section["spread"] = round(d10 - d2, 2)
+            section["spread"] = round(section["dgs10"]["value"] - section["dgs2"]["value"], 2)
         except Exception:
             pass
 
@@ -183,52 +165,36 @@ def _build_macro_section(fred_data: dict) -> dict:
 def _build_sentiment_section(sentiment: dict, web_data: dict) -> dict:
     """市场情绪板块"""
     section = {}
-
     if "cftc_percentile" in sentiment:
         section["cftc"] = sentiment["cftc_percentile"]
-
     if "gld_trend" in sentiment:
         section["gld"] = sentiment["gld_trend"]
-
     if "gvz" in web_data:
         gvz_data = web_data["gvz"]
         if isinstance(gvz_data, dict):
             section["gvz"] = gvz_data.get("gvz")
-
     if "regime_matrix" in sentiment:
         section["regime_matrix"] = sentiment["regime_matrix"]
-
     return section
 
 
 def _build_china_section(china_data: dict) -> dict:
     """中国市场板块"""
     section = {}
-
     if "shanghai_gold" in china_data:
         section["shanghai_gold"] = china_data["shanghai_gold"]
-
     if "usd_cny" in china_data:
         section["usd_cny"] = china_data["usd_cny"]
-
-    if "china_cpi" in china_data:
-        section["china_cpi"] = china_data["china_cpi"]
-
-    if "china_pmi" in china_data:
-        section["china_pmi"] = china_data["china_pmi"]
-
-    if "china_m2" in china_data:
-        section["china_m2"] = china_data["china_m2"]
-
-    if "china_foreign_reserve" in china_data:
-        section["china_foreign_reserve"] = china_data["china_foreign_reserve"]
-
+    for k in ["china_cpi", "china_pmi", "china_m2", "china_foreign_reserve"]:
+        if k in china_data:
+            section[k] = china_data[k]
     return section
 
 
 def _build_assets_comparison(fred_data: dict) -> list:
-    """资产表现对比"""
+    """资产表现对比（统一用年初至今）"""
     comparisons = []
+    year_start = f"{datetime.now().year}-01-01"
 
     for name, label in [("gold_price", "黄金"), ("sp500", "标普500")]:
         if name not in fred_data:
@@ -239,9 +205,12 @@ def _build_assets_comparison(fred_data: dict) -> list:
         col = name if name in df.columns else next((c for c in df.columns if c != "date"), None)
         if col is None:
             continue
-        first, last = float(df[col].iloc[0]), float(df[col].iloc[-1])
-        if first != 0:
-            comparisons.append((label, round((last - first) / first * 100, 2)))
+
+        this_year = df[df["date"] >= year_start]
+        first_val = float(this_year[col].iloc[0]) if not this_year.empty else float(df[col].iloc[0])
+        last_val = float(df[col].iloc[-1])
+        if first_val != 0:
+            comparisons.append((label, round((last_val - first_val) / first_val * 100, 2)))
 
     return comparisons
 
@@ -249,8 +218,6 @@ def _build_assets_comparison(fred_data: dict) -> list:
 def _build_signals(report: dict) -> list:
     """生成今日关键信号"""
     signals = []
-
-    # 实际利率信号
     macro = report.get("macro", {})
     real_rate = macro.get("real_rate")
     if real_rate is not None:
@@ -261,7 +228,6 @@ def _build_signals(report: dict) -> list:
         else:
             signals.append(("🟢", f"实际利率 {real_rate}% 低位利好金价"))
 
-    # CFTC 拥挤度
     sentiment = report.get("sentiment", {})
     cftc = sentiment.get("cftc", {})
     if isinstance(cftc, dict) and cftc.get("percentile") is not None:
@@ -271,27 +237,19 @@ def _build_signals(report: dict) -> list:
         elif pct >= 75:
             signals.append(("🟡", f"CFTC 净多头拥挤度 {pct}% — 偏高"))
 
-    # GLD 持仓趋势
     gld = sentiment.get("gld", {})
     if isinstance(gld, dict):
         trend = gld.get("trend", "")
         if "净流入" in trend:
-            signals.append(("🟢", f"GLD 持仓：{trend}"))
+            signals.append(("🟢", f"GLD 持仓{trend}"))
 
-    # 通胀矩阵
     matrix = sentiment.get("regime_matrix", {})
-    if isinstance(matrix, dict):
-        regime = matrix.get("regime", "")
-        outlook = matrix.get("gold_outlook", "")
-        if regime:
-            signals.append(("📊", f"增长×通胀定位：{regime} — {outlook}"))
+    if isinstance(matrix, dict) and matrix.get("regime"):
+        signals.append(("📊", f"增长×通胀定位：{matrix['regime']} — {matrix.get('gold_outlook', '')}"))
 
-    # 金价技术面
     tech = report.get("technical", {})
-    if tech:
-        ma = tech.get("moving_averages", {})
-        trend_signal = ma.get("trend_signal", "")
-        if trend_signal:
-            signals.append(("📈", f"技术面信号：{trend_signal}"))
+    ma = tech.get("moving_averages", {})
+    if ma.get("trend_signal"):
+        signals.append(("📈", f"技术面信号：{ma['trend_signal']}"))
 
     return signals

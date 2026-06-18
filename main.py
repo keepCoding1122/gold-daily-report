@@ -93,6 +93,7 @@ def main():
     fiscal = {}
     try:
         debt_gdp = None
+        gdp_val = None
         interest_revenue = None
         deficit_gdp = None
 
@@ -104,16 +105,17 @@ def main():
                 gdp_col = "gdp_real" if "gdp_real" in gdp_df.columns else next((c for c in gdp_df.columns if c != "date"), None)
                 if debt_col and gdp_col:
                     debt = float(debt_df[debt_col].iloc[-1])
-                    gdp = float(gdp_df[gdp_col].iloc[-1])
-                    debt_gdp = round(debt / gdp / 10, 1)
+                    gdp_val = float(gdp_df[gdp_col].iloc[-1])
+                    debt_gdp = round(debt / gdp_val / 10, 1)
 
         if "fiscal_deficit" in fred_data:
             deficit_df = fred_data["fiscal_deficit"]
-            if not deficit_df.empty:
-                deficit_col = "fiscal_deficit" if "fiscal_deficit" in deficit_df.columns else next((c for c in deficit_df.columns if c != "date"), None)
-                if deficit_col and debt_gdp:
+            if not deficit_df.empty and gdp_val is not None:
+                deficit_col = "fiscal_deficit" if "fiscal_deficit" in deficit_df.columns else next(
+                    (c for c in deficit_df.columns if c != "date"), None)
+                if deficit_col:
                     deficit = float(deficit_df[deficit_col].iloc[-1])
-                    deficit_gdp = round(abs(deficit) / (debt_gdp / 100 * 100) / 10, 1)
+                    deficit_gdp = round(abs(deficit) / gdp_val / 10, 1)
 
         fiscal = FiscalPressureIndex().calculate(
             debt_gdp=debt_gdp,
